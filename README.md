@@ -1,6 +1,6 @@
 # GitHub PR File Filter
 
-Extensão do Chrome que traz para a aba **Files changed** de um Pull Request do GitHub o comportamento do Code Review do Azure DevOps: clicar num arquivo da árvore mostra **só o diff daquele arquivo**, e clicar numa pasta mostra **só os arquivos daquela pasta**. Sem a extensão, o GitHub apenas rola a página até o arquivo.
+Extensão do Chrome que traz para a aba **Files changed** de um Pull Request do GitHub, e para a página de um commit, o comportamento do Code Review do Azure DevOps: clicar num arquivo da árvore mostra **só o diff daquele arquivo**, e clicar numa pasta mostra **só os arquivos daquela pasta**. Sem a extensão, o GitHub apenas rola a página até o arquivo.
 
 ## Recursos
 
@@ -18,6 +18,7 @@ Extensão do Chrome que traz para a aba **Files changed** de um Pull Request do 
 
 ## Limitações
 
-- Feita para a nova experiência de *Files changed* do GitHub (rota `/pull/N/changes`).
+- Funciona nas páginas que têm a árvore de arquivos lateral: *Files changed* de um PR (`/pull/N/changes`) e página de commit (`/commit/<sha>`).
+- A página de comparação (`/compare/a...b`) ainda usa a interface antiga do GitHub, sem árvore lateral, e não é suportada.
 - Depende da estrutura HTML do GitHub. Se o GitHub mudar os atributos usados (`role="treeitem"`, `div[role="region"][id^="diff-"]`, `button[data-file-path]`), a extensão precisa de ajuste.
 - Clicar numa pasta também a abre ou fecha na árvore, porque o GitHub faz isso no mesmo clique.

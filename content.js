@@ -1,14 +1,22 @@
 // GitHub PR File Filter
-// Na tela "Files changed" (rota /pull/N/changes), clicar num item da árvore
-// mostra somente os diffs daquele arquivo ou dos arquivos daquela pasta.
+// Nas telas de diff do GitHub que têm árvore de arquivos lateral, clicar num
+// item da árvore mostra somente os diffs daquele arquivo ou daquela pasta.
 //
-// Estrutura do DOM (experiência nova, React):
-//   árvore:  [role=treeitem]  id = caminho ("docs/app.js"); folhas não têm aria-expanded;
-//            cada item tem um <a href="...#diff-<hash>">
-//   diffs:   div[role=region][id="diff-<hash>"], filho de um wrapper "diffEntry__*"
+// Páginas suportadas (experiência nova, React):
+//   - PR:     /owner/repo/pull/N/changes (e /files, /commits/<sha>)
+//   - Commit: /owner/repo/commit/<sha>
 //
-// O filtro é aplicado via <style> (não via estilo inline), para sobreviver
-// aos re-renders do React e à virtualização da lista de diffs.
+// Estrutura do DOM:
+//   árvore: [role=tree] [role=treeitem]  id = caminho ("docs/app.js");
+//           folhas não têm aria-expanded; cada item tem <a href="...#diff-<hash>">
+//   diffs:  div[role=region], um por arquivo, envolvido por um wrapper (o pai).
+//           No PR o region tem id="diff-<hash>"; no commit não tem id, então o
+//           arquivo é identificado pelo caminho: [data-file-path] dentro do
+//           region ou o texto do cabeçalho (aria-labelledby).
+//
+// O filtro marca o wrapper com data-ghpff-hidden e um <style> o esconde. Um
+// MutationObserver reaplica a marcação quando o React redesenha ou carrega
+// mais diffs (a lista é virtualizada/carregada aos poucos).
 
 (() => {
   if (window.__ghPrFileFilter) return;
@@ -16,45 +24,63 @@
 
   const STYLE_ID = 'gh-pr-file-filter-style';
   const BAR_ID = 'gh-pr-file-filter-bar';
-  const ENTRY = '[class*="diffEntry"]';
-  const REGION = 'div[role="region"][id^="diff-"]';
+  const HIDDEN_ATTR = 'data-ghpff-hidden';
+  const REGIONS = 'div[role="region"][id^="diff-"], #diff-content-parent div[role="region"]';
+  const LEAF = '[role="tree"] [role="treeitem"]:not([aria-expanded])';
 
-  let active = null; // { path, isFolder, hashes, pathname }
+  // { path, isFolder, paths:Set, hashes:Set, pathname }
+  let active = null;
 
-  const isChangesPage = () => /\/pull\/\d+\/(changes|files)/.test(location.pathname);
+  const isChangesPage = () =>
+    /\/pull\/\d+\/(changes|files|commits)|\/commit\/[0-9a-f]{7,40}/.test(location.pathname);
 
   const hashOf = (treeItem) => {
     const href = treeItem.querySelector('a[href*="#diff-"]')?.getAttribute('href') || '';
     return href.split('#')[1] || null;
   };
 
-  // Folhas (arquivos) sob um item da árvore; o próprio item se for arquivo.
-  const leavesOf = (treeItem) =>
-    treeItem.hasAttribute('aria-expanded')
-      ? [...treeItem.querySelectorAll('[role="treeitem"]:not([aria-expanded])')]
-      : [treeItem];
+  // Arquivos selecionados: o próprio item, ou todas as folhas sob a pasta.
+  // Para pastas usa o prefixo do caminho, porque pastas recolhidas podem não
+  // ter os filhos renderizados dentro delas.
+  function leavesFor(treeItem) {
+    if (!treeItem.hasAttribute('aria-expanded')) return [treeItem];
+    const prefix = treeItem.id + '/';
+    const byPrefix = [...document.querySelectorAll(LEAF)].filter((l) => l.id.startsWith(prefix));
+    return byPrefix.length
+      ? byPrefix
+      : [...treeItem.querySelectorAll('[role="treeitem"]:not([aria-expanded])')];
+  }
 
-  // Para pastas, usa o caminho em vez do DOM: pastas recolhidas podem não ter
-  // os filhos renderizados. Coleta todas as folhas cujo id começa com "pasta/".
-  const hashesFor = (treeItem) => {
-    const isFolder = treeItem.hasAttribute('aria-expanded');
-    let leaves;
-    if (isFolder) {
-      const prefix = treeItem.id + '/';
-      leaves = [...document.querySelectorAll('[role="treeitem"]:not([aria-expanded])')]
-        .filter((l) => l.id.startsWith(prefix));
-      if (!leaves.length) leaves = leavesOf(treeItem);
-    } else {
-      leaves = [treeItem];
+  // Caminho do arquivo de um diff. Em renomeações o cabeçalho traz
+  // "antigo novo"; o caminho novo (o da árvore) é o último.
+  function pathOf(region) {
+    const fp = region.querySelector('[data-file-path]')?.dataset.filePath;
+    if (fp) return fp;
+    const label = document.getElementById(region.getAttribute('aria-labelledby') || '');
+    const txt = (label?.textContent || region.getAttribute('aria-label') || '')
+      .replace(/[‎‏]/g, ' ')
+      .trim();
+    return txt.split(/\s+/).pop() || null;
+  }
+
+  const matches = (region) =>
+    active.hashes.has(region.id) || active.paths.has(pathOf(region));
+
+  function applyFilter() {
+    for (const region of document.querySelectorAll(REGIONS)) {
+      const wrapper = region.parentElement;
+      if (!wrapper) continue;
+      const hide = !!active && !matches(region);
+      if (hide !== wrapper.hasAttribute(HIDDEN_ATTR)) wrapper.toggleAttribute(HIDDEN_ATTR, hide);
     }
-    return leaves.map(hashOf).filter(Boolean);
-  };
+  }
 
   function render() {
     let style = document.getElementById(STYLE_ID);
     if (!active) {
       style?.remove();
       document.getElementById(BAR_ID)?.remove();
+      applyFilter();
       return;
     }
     if (!style) {
@@ -62,14 +88,13 @@
       style.id = STYLE_ID;
       document.head.appendChild(style);
     }
-    const keep = active.hashes.map((h) => `:not(:has(> #${CSS.escape(h)}))`).join('');
-    const sel = CSS.escape(active.path);
     style.textContent = `
-      ${ENTRY}:has(> ${REGION})${keep} { display: none !important; }
-      [role="treeitem"]#${sel} > div:first-child {
+      [${HIDDEN_ATTR}] { display: none !important; }
+      [role="treeitem"]#${CSS.escape(active.path)} > div:first-child {
         box-shadow: inset 3px 0 0 var(--fgColor-accent, #0969da);
         background: var(--bgColor-accent-muted, rgba(84,174,255,.2));
       }`;
+    applyFilter();
     renderBar();
   }
 
@@ -88,13 +113,12 @@
       const label = document.createElement('span');
       const btn = document.createElement('button');
       btn.textContent = 'Mostrar todos (Esc)';
-      btn.style.cssText =
-        'all:unset;cursor:pointer;text-decoration:underline;opacity:.9';
+      btn.style.cssText = 'all:unset;cursor:pointer;text-decoration:underline;opacity:.9';
       btn.addEventListener('click', clear);
       bar.append(label, btn);
       document.body.appendChild(bar);
     }
-    const n = active.hashes.length;
+    const n = active.paths.size;
     bar.firstChild.textContent =
       `${active.isFolder ? '📁' : '📄'} ${active.path}` +
       (active.isFolder ? ` — ${n} arquivo${n === 1 ? '' : 's'}` : '');
@@ -106,9 +130,13 @@
   }
 
   function scrollToFirst() {
-    const first = document.getElementById(active?.hashes[0]);
-    first?.closest(ENTRY)?.scrollIntoView({ block: 'start' });
+    const first = [...document.querySelectorAll(REGIONS)].find(
+      (r) => r.parentElement && !r.parentElement.hasAttribute(HIDDEN_ATTR)
+    );
+    first?.parentElement.scrollIntoView({ block: 'start' });
   }
+
+  const lastClick = { item: null, at: 0 };
 
   document.addEventListener(
     'click',
@@ -116,11 +144,17 @@
       if (!isChangesPage()) return;
       // Ignora cliques com modificador (abrir em nova aba etc.)
       if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      // closest() pega o item mais interno: clique num arquivo dentro de uma pasta é o arquivo
       const item = e.target.closest('[role="tree"] [role="treeitem"]');
       if (!item) return;
-      // closest() pega o item mais interno: clique num arquivo dentro de uma pasta é o arquivo
-      const hashes = hashesFor(item);
-      if (!hashes.length) return;
+      // Na página de commit o GitHub repassa o clique do item para o link
+      // interno, gerando dois eventos seguidos; o segundo é ignorado.
+      const now = performance.now();
+      if (lastClick.item === item && now - lastClick.at < 400) return;
+      lastClick.item = item;
+      lastClick.at = now;
+      const leaves = leavesFor(item);
+      if (!leaves.length) return;
       // Segundo clique no mesmo item desliga o filtro
       if (active && active.path === item.id) {
         clear();
@@ -129,7 +163,8 @@
       active = {
         path: item.id,
         isFolder: item.hasAttribute('aria-expanded'),
-        hashes,
+        paths: new Set(leaves.map((l) => l.id)),
+        hashes: new Set(leaves.map(hashOf).filter(Boolean)),
         pathname: location.pathname,
       };
       render();
@@ -146,7 +181,6 @@
     clear();
   });
 
-  // Navegação SPA: limpa o filtro ao sair da página/PR.
   // ---- Expansão automática das linhas de contexto ----
   // Opção salva em chrome.storage.sync (popup da extensão):
   //   expandMode = 'collapsed' (padrão do GitHub: só os hunks) | 'expanded' (arquivo inteiro)
@@ -200,14 +234,21 @@
     });
   }
 
-  // Navegação SPA: limpa o filtro ao sair da página/PR e reaplica a expansão
-  // aos diffs que vão sendo carregados (o GitHub carrega aos poucos).
+  // Navegação SPA: limpa o filtro ao sair da página e reaplica filtro e
+  // expansão aos diffs que vão sendo carregados (o GitHub carrega aos poucos).
   let lastPath = location.pathname;
+  let filterFrame = 0;
   new MutationObserver(() => {
     if (location.pathname !== lastPath) {
       lastPath = location.pathname;
       expandedPaths.clear();
       if (active && active.pathname !== lastPath) clear();
+    }
+    if (active && !filterFrame) {
+      filterFrame = requestAnimationFrame(() => {
+        filterFrame = 0;
+        if (active) applyFilter();
+      });
     }
     scheduleExpand();
   }).observe(document.documentElement, { childList: true, subtree: true });

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "GitHub PR File Filter",
-  "version": "0.2.0",
-  "description": "Na aba de alterações de um PR do GitHub, clicar num arquivo ou pasta da árvore mostra só os diffs dele (como no Azure DevOps).",
+  "version": "0.3.0",
+  "description": "Em PRs e commits do GitHub, clicar num arquivo ou pasta da árvore mostra só os diffs dele (como no Azure DevOps).",
   "permissions": ["storage"],
   "action": {
     "default_title": "GitHub PR File Filter",
@@ -10,7 +10,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://github.com/*/*/pull/*"],
+      "matches": ["https://github.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
